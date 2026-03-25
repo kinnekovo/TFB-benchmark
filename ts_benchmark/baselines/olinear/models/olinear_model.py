@@ -9,6 +9,7 @@ from ..layers.SelfAttention_Family import AttentionLayer, EnhancedAttention
 
 import sys
 
+
 class Model(nn.Module):
     def __init__(self, configs):
         super(Model, self).__init__()
