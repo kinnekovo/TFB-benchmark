@@ -9,27 +9,28 @@ def integrate():
     for sd in sub_dirs:
         os.makedirs(os.path.join(base_path, sd), exist_ok=True)
         # 确保每个子目录都是 package
-        with open(os.path.join(base_path, sd, "__init__.py"), "a") as f:
+        with open(os.path.join(base_path, sd, "__init__.py"), "a", encoding="utf-8") as f:
             pass
 
     # 2. 修正 __init__.py (处理之前的拼写错误 _init_.py)
     if os.path.exists(os.path.join(base_path, "_init_.py")):
         os.rename(os.path.join(base_path, "_init_.py"), os.path.join(base_path, "__init__.py"))
 
-    with open(os.path.join(base_path, "__init__.py"), "w") as f:
+    with open(os.path.join(base_path, "__init__.py"), "w", encoding="utf-8") as f:
         f.write("from .olinear import OLinear\\n")
 
     # 3. 核心适配器重写 (修复硬编码路径，支持 TFB 动态配置)
     olinear_py_content = """
-import torch
-import torch.nn as nn
-from torch import optim
+# -*- coding: utf-8 -*-
 import os
 
-from .models.olinear_model import Model as OLinearModel
+import torch.nn as nn
+from torch import optim
+
 from ts_benchmark.baselines.deep_forecasting_model_base import DeepForecastingModelBase
 
-# 定义 OLinear 标准超参数
+from .models.olinear_model import Model as OLinearModel
+
 MODEL_HYPER_PARAMS = {
     "d_model": 256,
     "d_ff": 512,
@@ -47,11 +48,13 @@ MODEL_HYPER_PARAMS = {
     "lr": 0.001,
 }
 
+
 class OLinear(DeepForecastingModelBase):
     def __init__(self, **kwargs):
-        # 动态处理 root_path，优先使用传入参数或环境变量
-        if 'root_path' not in kwargs:
-            kwargs['root_path'] = os.getcwd()
+        if "root_path" not in kwargs:
+            kwargs["root_path"] = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..", "..")
+            )
         super(OLinear, self).__init__(MODEL_HYPER_PARAMS, **kwargs)
 
     @property
@@ -64,24 +67,22 @@ class OLinear(DeepForecastingModelBase):
         return criterion, optimizer
 
     def _init_model(self):
-        # 确保 Q 矩阵文件路径是绝对路径或相对于项目根目录
         return OLinearModel(self.config)
 
     def _process(self, input, target, input_mark, target_mark):
-        # TFB 标准数据流转
         outputs = self.model(input)
         return {"output": outputs}
 """
-    with open(os.path.join(base_path, "olinear.py"), "w") as f:
+    with open(os.path.join(base_path, "olinear.py"), "w", encoding="utf-8") as f:
         f.write(olinear_py_content.strip())
 
     # 4. 修正全局基准注册
     baselines_init = "ts_benchmark/baselines/__init__.py"
-    with open(baselines_init, "r") as f:
+    with open(baselines_init, "r", encoding="utf-8") as f:
         content = f.read()
 
     if "from .olinear import OLinear" not in content:
-        with open(baselines_init, "a") as f:
+        with open(baselines_init, "a", encoding="utf-8") as f:
             f.write("\\nfrom .olinear import OLinear\\n")
 
     print("✅ Baseline 结构集成完成！")
