@@ -1,3 +1,5 @@
+import os
+
 from ts_benchmark.baselines.olinear.models.olinear_model import Model as OLinearModel
 from ts_benchmark.baselines.deep_forecasting_model_base import DeepForecastingModelBase
 
@@ -35,6 +37,8 @@ class OLinear(DeepForecastingModelBase):
     """
 
     def __init__(self, **kwargs):
+        if "root_path" not in kwargs:
+            kwargs["root_path"] = os.getcwd()
         super(OLinear, self).__init__(MODEL_HYPER_PARAMS, **kwargs)
 
     @property
