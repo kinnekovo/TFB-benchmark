@@ -22,24 +22,28 @@ class Model(nn.Module):
         self.Q_chan_indep = configs.Q_chan_indep
 
         q_mat_dir = configs.Q_MAT_file if self.Q_chan_indep else configs.q_mat_file
-        if not os.path.isfile(q_mat_dir):
+        if not os.path.isabs(q_mat_dir):
             q_mat_dir = os.path.join(configs.root_path, q_mat_dir)
-        assert os.path.isfile(q_mat_dir)
+        assert os.path.isfile(q_mat_dir), f"File not found: {q_mat_dir}"
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.Q_mat = torch.from_numpy(np.load(q_mat_dir)).to(torch.float32).to(device)
 
-        assert (self.Q_mat.ndim == 3 if self.Q_chan_indep else self.Q_mat.ndim == 2)
-        assert (self.Q_mat.shape[0] == self.enc_in if self.Q_chan_indep else self.Q_mat.shape[0] == self.seq_len)
+        assert (self.Q_mat.ndim == 3 if self.Q_chan_indep else self.Q_mat.ndim == 2), \
+            f"Q_mat must be 3D (channel-independent) or 2D, got ndim={self.Q_mat.ndim}"
+        assert (self.Q_mat.shape[0] == self.enc_in if self.Q_chan_indep else self.Q_mat.shape[0] == self.seq_len), \
+            f"Q_mat shape[0] must match {'enc_in=' + str(self.enc_in) if self.Q_chan_indep else 'seq_len=' + str(self.seq_len)}, got {self.Q_mat.shape[0]}"
 
         q_out_mat_dir = configs.Q_OUT_MAT_file if self.Q_chan_indep else configs.q_out_mat_file
-        if not os.path.isfile(q_out_mat_dir):
+        if not os.path.isabs(q_out_mat_dir):
             q_out_mat_dir = os.path.join(configs.root_path, q_out_mat_dir)
-        assert os.path.isfile(q_out_mat_dir)
+        assert os.path.isfile(q_out_mat_dir), f"File not found: {q_out_mat_dir}"
         self.Q_out_mat = torch.from_numpy(np.load(q_out_mat_dir)).to(torch.float32).to(device)
 
-        assert (self.Q_out_mat.ndim == 3 if self.Q_chan_indep else self.Q_out_mat.ndim == 2)
+        assert (self.Q_out_mat.ndim == 3 if self.Q_chan_indep else self.Q_out_mat.ndim == 2), \
+            f"Q_out_mat must be 3D (channel-independent) or 2D, got ndim={self.Q_out_mat.ndim}"
         assert (self.Q_out_mat.shape[0] == self.enc_in if self.Q_chan_indep else
-                self.Q_out_mat.shape[0] == self.pred_len)
+                self.Q_out_mat.shape[0] == self.pred_len), \
+            f"Q_out_mat shape[0] must match {'enc_in=' + str(self.enc_in) if self.Q_chan_indep else 'pred_len=' + str(self.pred_len)}, got {self.Q_out_mat.shape[0]}"
 
         self.patch_len = configs.temp_patch_len
         self.stride = configs.temp_stride

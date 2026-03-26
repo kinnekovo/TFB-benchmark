@@ -100,7 +100,7 @@ class EarlyStopping:
         delete_txt_files_in_folder(path)
         file_path = os.path.join(path, f'Epoch_{epoch}.txt')
         # Create the file with the name "epoch_{i}.txt"
-        with open(file_path, 'w') as file:
+        with open(file_path, 'w', encoding='utf-8') as file:
             file.write(f'Current Epoch: {epoch}')
         if self.save_every_epoch:
             if epoch:
