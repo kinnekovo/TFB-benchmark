@@ -154,8 +154,17 @@ def run_optuna_hpo(
             train_ratio_in_tv=hpo_train_ratio,
         )
 
-        val_loss = float(getattr(model, "best_val_loss", np.inf))
-        return val_loss
+        val_loss = getattr(model, "best_val_loss", None)
+        if val_loss is None:
+            logger.warning(
+                "model %s does not expose 'best_val_loss'; "
+                "trial %d will return inf. "
+                "Only models derived from DeepForecastingModelBase support HPO.",
+                type(model).__name__,
+                trial.number,
+            )
+            val_loss = np.inf
+        return float(val_loss)
 
     sampler = optuna.samplers.TPESampler(seed=seed)
     study = optuna.create_study(direction="minimize", sampler=sampler)
