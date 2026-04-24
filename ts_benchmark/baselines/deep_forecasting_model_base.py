@@ -449,6 +449,8 @@ class DeepForecastingModelBase(ModelBase):
 
         print(f"Total trainable parameters: {total_params}")
 
+        self.best_val_loss = np.inf
+
         for epoch in range(config.num_epochs):
             self.model.train()
             # for input, target, input_mark, target_mark in train_data_loader:
@@ -489,6 +491,7 @@ class DeepForecastingModelBase(ModelBase):
 
             if train_ratio_in_tv != 1:
                 valid_loss = self.validate(valid_data_loader, series_dim, criterion)
+                self.best_val_loss = min(self.best_val_loss, float(valid_loss))
                 improved = self.early_stopping(valid_loss, self.model)
                 if improved:
                     self.check_point = self.save_checkpoint(self.model)

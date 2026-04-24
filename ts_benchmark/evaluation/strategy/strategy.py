@@ -71,6 +71,9 @@ class Strategy(metaclass=abc.ABCMeta):
     # this attribute when there are new required fields, and the required fields in the super
     # classes need not be included
     REQUIRED_CONFIGS = ["strategy_name"]
+    # Optional (recognized but not required) fields in `strategy_config`; subclasses may extend
+    # this list to suppress spurious "Unknown options" warnings for known optional keys.
+    OPTIONAL_CONFIGS: List[str] = []
     # Most strategy configs allow inputting a mapping from data names to config values, this is
     # a required key in such mapping to set default config value for unspecified data names
     DEFAULT_CONFIG_KEY = "__default__"
@@ -125,8 +128,9 @@ class Strategy(metaclass=abc.ABCMeta):
         """
         provided_args = set(self.strategy_config)
         required_args = set(self.get_required_configs())
+        optional_args = set(self.get_optional_configs())
         missing_args = required_args - provided_args
-        extra_args = provided_args - required_args
+        extra_args = provided_args - required_args - optional_args
         if missing_args:
             error_message = f"Missing options: {', '.join(sorted(missing_args))} "
             raise RuntimeError(error_message)
@@ -150,6 +154,20 @@ class Strategy(metaclass=abc.ABCMeta):
         for super_cls in inspect.getmro(cls):
             if hasattr(super_cls, "REQUIRED_CONFIGS"):
                 ret.extend(super_cls.REQUIRED_CONFIGS)
+        return sorted(set(ret))
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def get_optional_configs(cls) -> List[str]:
+        """
+        Gets the optional (recognised but not required) configs from the current class
+        and all super classes.  Keys listed here will not trigger an "Unknown options"
+        warning in :meth:`_check_config`.
+        """
+        ret = []
+        for super_cls in inspect.getmro(cls):
+            if hasattr(super_cls, "OPTIONAL_CONFIGS"):
+                ret.extend(super_cls.OPTIONAL_CONFIGS)
         return sorted(set(ret))
 
     @staticmethod

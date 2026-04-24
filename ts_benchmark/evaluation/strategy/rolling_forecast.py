@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import itertools
 import time
-from typing import List, Optional, Tuple, Any, Dict
+from typing import Dict, List, Optional, Tuple, Any
 
 import numpy as np
 import pandas as pd
@@ -178,6 +178,7 @@ class RollingForecast(ForecastingStrategy):
         "save_true_pred",
         "target_channel",
     ]
+    OPTIONAL_CONFIGS = ["hpo"]
 
     @staticmethod
     def _get_index(
@@ -238,11 +239,72 @@ class RollingForecast(ForecastingStrategy):
         :param series_name: the name of the target series.
         :return: The evaluation results.
         """
-        model = model_factory()
-        if model.batch_forecast.__annotations__.get("not_implemented_batch"):
-            return self._eval_sample(series, meta_info, model, series_name)
+        hpo_cfg: Optional[Dict] = self.strategy_config.get("hpo")
+        prefit_info: Optional[Dict] = None
+
+        if hpo_cfg and hpo_cfg.get("enabled", False):
+            from ts_benchmark.hpo.optuna_hpo import run_optuna_hpo  # noqa: PLC0415
+
+            target_channel = self._get_scalar_config_value(
+                "target_channel", series_name
+            )
+            tv_ratio = self._get_scalar_config_value("tv_ratio", series_name)
+            seed = self._get_scalar_config_value("seed", series_name)
+            deterministic_mode = self._get_scalar_config_value(
+                "deterministic", series_name
+            )
+
+            train_length, _ = self._get_split_lens(series, meta_info, tv_ratio)
+            train_valid_data, _ = split_time(series, train_length)
+            target_train_valid_data, exog_data = split_channel(
+                train_valid_data, target_channel
+            )
+            covariates: Dict = {"exog": exog_data}
+
+            best_params, best_value = run_optuna_hpo(
+                model_factory,
+                target_train_valid_data,
+                covariates,
+                hpo_cfg,
+                seed,
+                deterministic_mode,
+            )
+            hpo_log_info = (
+                f"HPO best_params={best_params} best_val_loss={best_value:.6f}; "
+            )
+
+            # Refit: fresh model with merged params, train on full train_valid_data
+            merged_params = {**model_factory.model_hyper_params, **best_params}
+            refit_model = model_factory.model_factory(**merged_params)
+            start_fit_time = time.time()
+            fit_method = (
+                refit_model.forecast_fit
+                if hasattr(refit_model, "forecast_fit")
+                else refit_model.fit
+            )
+            fit_method(
+                target_train_valid_data,
+                covariates=covariates,
+                train_ratio_in_tv=1,
+            )
+            end_fit_time = time.time()
+            model = refit_model
+            prefit_info = {
+                "start_fit_time": start_fit_time,
+                "end_fit_time": end_fit_time,
+                "hpo_log_info": hpo_log_info,
+            }
         else:
-            return self._eval_batch(series, meta_info, model, series_name)
+            model = model_factory()
+
+        if model.batch_forecast.__annotations__.get("not_implemented_batch"):
+            return self._eval_sample(
+                series, meta_info, model, series_name, prefit_info=prefit_info
+            )
+        else:
+            return self._eval_batch(
+                series, meta_info, model, series_name, prefit_info=prefit_info
+            )
 
     def _eval_sample(
         self,
@@ -250,6 +312,7 @@ class RollingForecast(ForecastingStrategy):
         meta_info: Optional[pd.Series],
         model: ModelBase,
         series_name: str,
+        prefit_info: Optional[Dict] = None,
     ) -> List:
         """
         The sample execution pipeline of forecasting tasks.
@@ -258,6 +321,9 @@ class RollingForecast(ForecastingStrategy):
         :param meta_info: The corresponding meta-info.
         :param model: The model used for prediction.
         :param series_name: the name of the target series.
+        :param prefit_info: When provided the model has already been fitted (HPO refit);
+            this dict must contain ``start_fit_time``, ``end_fit_time``, and
+            ``hpo_log_info``.  The training step inside this method is skipped.
         :return: The evaluation results.
         """
         target_channel = self._get_scalar_config_value("target_channel", series_name)
@@ -278,14 +344,20 @@ class RollingForecast(ForecastingStrategy):
         covariates_train = {}
         covariates_train["exog"] = exog_data
 
-        start_fit_time = time.time()
-        fit_method = model.forecast_fit if hasattr(model, "forecast_fit") else model.fit
-        fit_method(
-            target_train_valid_data,
-            covariates=covariates_train,
-            train_ratio_in_tv=train_ratio_in_tv,
-        )
-        end_fit_time = time.time()
+        if prefit_info is None:
+            start_fit_time = time.time()
+            fit_method = (
+                model.forecast_fit if hasattr(model, "forecast_fit") else model.fit
+            )
+            fit_method(
+                target_train_valid_data,
+                covariates=covariates_train,
+                train_ratio_in_tv=train_ratio_in_tv,
+            )
+            end_fit_time = time.time()
+        else:
+            start_fit_time = prefit_info["start_fit_time"]
+            end_fit_time = prefit_info["end_fit_time"]
 
         eval_scaler = self._get_eval_scaler(target_train_valid_data, train_ratio_in_tv)
 
@@ -335,7 +407,7 @@ class RollingForecast(ForecastingStrategy):
             total_inference_time,
             actual_data_encoded,
             inference_data_encoded,
-            "",
+            prefit_info["hpo_log_info"] if prefit_info else "",
         ]
         return single_series_results
 
@@ -345,6 +417,7 @@ class RollingForecast(ForecastingStrategy):
         meta_info: Optional[pd.Series],
         model: ModelBase,
         series_name: str,
+        prefit_info: Optional[Dict] = None,
     ) -> List:
         """
         The batch execution pipeline of forecasting tasks.
@@ -353,6 +426,9 @@ class RollingForecast(ForecastingStrategy):
         :param meta_info: The corresponding meta-info.
         :param model: The model used for prediction.
         :param series_name: The name of the target series.
+        :param prefit_info: When provided the model has already been fitted (HPO refit);
+            this dict must contain ``start_fit_time``, ``end_fit_time``, and
+            ``hpo_log_info``.  The training step inside this method is skipped.
         :return: The evaluation results.
         """
         target_channel = self._get_scalar_config_value("target_channel", series_name)
@@ -376,14 +452,20 @@ class RollingForecast(ForecastingStrategy):
         covariates_train["exog"] = exog_train_valid_data
         covariates4batch["exog"] = exog_data4batch
 
-        start_fit_time = time.time()
-        fit_method = model.forecast_fit if hasattr(model, "forecast_fit") else model.fit
-        fit_method(
-            target_train_valid_data,
-            covariates=covariates_train,
-            train_ratio_in_tv=train_ratio_in_tv,
-        )
-        end_fit_time = time.time()
+        if prefit_info is None:
+            start_fit_time = time.time()
+            fit_method = (
+                model.forecast_fit if hasattr(model, "forecast_fit") else model.fit
+            )
+            fit_method(
+                target_train_valid_data,
+                covariates=covariates_train,
+                train_ratio_in_tv=train_ratio_in_tv,
+            )
+            end_fit_time = time.time()
+        else:
+            start_fit_time = prefit_info["start_fit_time"]
+            end_fit_time = prefit_info["end_fit_time"]
 
         eval_scaler = self._get_eval_scaler(target_train_valid_data, train_ratio_in_tv)
 
@@ -434,7 +516,7 @@ class RollingForecast(ForecastingStrategy):
             total_inference_time,
             actual_data_encoded,
             inference_data_encoded,
-            "",
+            prefit_info["hpo_log_info"] if prefit_info else "",
         ]
         return single_series_results
 
