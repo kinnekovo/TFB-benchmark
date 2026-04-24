@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -42,6 +42,7 @@ class FixedForecast(ForecastingStrategy):
         "save_true_pred",
         "target_channel",
     ]
+    OPTIONAL_CONFIGS = ["hpo"]
 
     def _execute(
         self,
@@ -50,7 +51,8 @@ class FixedForecast(ForecastingStrategy):
         model_factory: ModelFactory,
         series_name: str,
     ) -> List:
-        model = model_factory()
+        hpo_cfg: Optional[Dict] = self.strategy_config.get("hpo")
+        hpo_log_info = ""
 
         target_channel = self._get_scalar_config_value("target_channel", series_name)
         horizon = self._get_scalar_config_value("horizon", series_name)
@@ -68,15 +70,41 @@ class FixedForecast(ForecastingStrategy):
             train_valid_data, target_channel
         )
         target_test_data, _ = split_channel(test_data, target_channel)
-        covariates = {}
+        covariates: Dict = {}
         covariates["exog"] = exog_train_valid_data
+
+        if hpo_cfg and hpo_cfg.get("enabled", False):
+            from ts_benchmark.hpo.optuna_hpo import run_optuna_hpo  # noqa: PLC0415
+
+            seed = self._get_scalar_config_value("seed", series_name)
+            deterministic_mode = self._get_scalar_config_value(
+                "deterministic", series_name
+            )
+            best_params, best_value = run_optuna_hpo(
+                model_factory,
+                target_train_valid_data,
+                covariates,
+                hpo_cfg,
+                seed,
+                deterministic_mode,
+            )
+            hpo_log_info = (
+                f"HPO best_params={best_params} best_val_loss={best_value:.6f}; "
+            )
+            # Refit: fresh model with merged params, train on full train_valid_data
+            merged_params = {**model_factory.model_hyper_params, **best_params}
+            model = model_factory.model_factory(**merged_params)
+            refit_train_ratio = 1
+        else:
+            model = model_factory()
+            refit_train_ratio = train_ratio_in_tv
 
         start_fit_time = time.time()
         fit_method = model.forecast_fit if hasattr(model, "forecast_fit") else model.fit
         fit_method(
             target_train_valid_data,
             covariates=covariates,
-            train_ratio_in_tv=train_ratio_in_tv,
+            train_ratio_in_tv=refit_train_ratio,
         )
         end_fit_time = time.time()
         predicted = model.forecast(
@@ -84,7 +112,7 @@ class FixedForecast(ForecastingStrategy):
         )
         end_inference_time = time.time()
 
-        single_series_results, log_info = self.evaluator.evaluate_with_log(
+        single_series_results, eval_log_info = self.evaluator.evaluate_with_log(
             target_test_data.to_numpy(),
             predicted,
             # TODO: add configs to control scaling behavior
@@ -109,7 +137,7 @@ class FixedForecast(ForecastingStrategy):
             end_inference_time - end_fit_time,
             actual_data_encoded,
             inference_data_encoded,
-            log_info,
+            hpo_log_info + eval_log_info,
         ]
 
         return single_series_results
